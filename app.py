@@ -5,32 +5,26 @@ import pandas as pd
 import re
 import io
 import os
-import glob
+import urllib.request
 
-# ── Resolve a CJK-capable font file ─────────────────────────────────────────
-def _find_cjk_font():
-    candidates = [
-        # macOS
-        "/Library/Fonts/Arial Unicode.ttf",
-        "/System/Library/Fonts/STHeiti Medium.ttc",
-        # Streamlit Cloud / Ubuntu (installed via packages.txt)
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            return p
-    # Last resort: search
-    found = glob.glob("/usr/share/fonts/**/Noto*CJK*.ttc", recursive=True)
-    if found:
-        return found[0]
-    found = glob.glob("/usr/share/fonts/**/Noto*CJK*.otf", recursive=True)
-    if found:
-        return found[0]
-    return None   # will fall back to ASCII-only rendering
+# ── Download CJK font once and cache across sessions ────────────────────────
+_FONT_PATH = "/tmp/NotoSansSC.otf"
+_FONT_URL  = (
+    "https://github.com/googlefonts/noto-cjk/raw/main"
+    "/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf"
+)
 
-CJK_FONT_PATH = _find_cjk_font()
+@st.cache_resource(show_spinner="正在加载中文字体（首次约需 10 秒）…")
+def get_cjk_font() -> str:
+    """Download NotoSansSC once; return local path."""
+    local = "/Library/Fonts/Arial Unicode.ttf"   # macOS shortcut
+    if os.path.exists(local):
+        return local
+    if not os.path.exists(_FONT_PATH):
+        urllib.request.urlretrieve(_FONT_URL, _FONT_PATH)
+    return _FONT_PATH
+
+CJK_FONT_PATH = get_cjk_font()
 
 st.set_page_config(page_title="Packing Slip B4 Annotator", layout="centered")
 st.title("📦 Packing Slip B4 Annotator")
@@ -197,23 +191,17 @@ def stamp_gift_label(fitz_page, pl_page, gift_lines):
     shape.finish(fill=(1.0, 0.95, 0.2), color=(0.85, 0.7, 0.0), width=1.5)
     shape.commit()
 
-    # One textbox per line — use CJK font file when available
+    # One line per item — insert_text never clips, works with fontfile
     for j, line in enumerate(gift_lines):
-        line_rect = fitz.Rect(
-            MARGIN, stamp_y + j * line_h,
-            pw - MARGIN, stamp_y + (j + 1) * line_h + 4
-        )
-        kwargs = dict(
+        y = stamp_y + j * line_h + line_h * 0.78
+        fitz_page.insert_text(
+            fitz.Point(MARGIN + 2, y),
+            line,
             fontsize=font_size,
+            fontfile=CJK_FONT_PATH,
+            fontname="cjk",
             color=(0.05, 0.05, 0.05),
-            align=0,
         )
-        if CJK_FONT_PATH:
-            kwargs["fontfile"] = CJK_FONT_PATH
-            kwargs["fontname"] = "cjk"
-        else:
-            kwargs["fontname"] = "helv"
-        fitz_page.insert_textbox(line_rect, line, **kwargs)
 
 
 # ── Annotate PDF ────────────────────────────────────────────────────────────
