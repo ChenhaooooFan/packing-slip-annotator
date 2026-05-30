@@ -4,6 +4,88 @@ import fitz  # PyMuPDF
 import pandas as pd
 import re
 import io
+import os
+import glob
+import urllib.request
+from PIL import Image, ImageDraw, ImageFont
+
+# ── Locate a CJK-capable TTF/TTC font ───────────────────────────────────────
+@st.cache_resource(show_spinner="加载字体中…")
+def get_cjk_font_path() -> str:
+    # macOS
+    for p in ["/Library/Fonts/Arial Unicode.ttf",
+               "/System/Library/Fonts/STHeiti Medium.ttc"]:
+        if os.path.exists(p):
+            return p
+    # Streamlit Cloud / Ubuntu  (packages.txt installs fonts-noto-cjk)
+    hits = glob.glob("/usr/share/fonts/**/Noto*CJK*.ttc", recursive=True)
+    if hits:
+        return hits[0]
+    hits = glob.glob("/usr/share/fonts/**/Noto*CJK*.otf", recursive=True)
+    if hits:
+        return hits[0]
+    # Last resort: download a small subset
+    dest = "/tmp/NotoSansSC.otf"
+    if not os.path.exists(dest):
+        urllib.request.urlretrieve(
+            "https://github.com/googlefonts/noto-cjk/raw/main"
+            "/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf", dest)
+    return dest
+
+CJK_FONT_PATH = get_cjk_font_path()
+
+
+def make_label_image(gift_lines: list[str], page_width_pt: float) -> bytes:
+    """
+    Render gift_lines as a yellow PIL image and return PNG bytes.
+    Uses a real CJK font → guaranteed correct rendering on all platforms.
+    """
+    DPI = 150
+    SCALE = DPI / 72          # 1 pt → pixels
+    FONT_PT = 13              # label font size in points
+    LINE_H_PX = int(18 * SCALE)
+    FONT_PX   = int(FONT_PT * SCALE)
+    PAD = int(4 * SCALE)
+
+    img_w = int((page_width_pt - 8) * SCALE)
+    img_h = len(gift_lines) * LINE_H_PX + PAD * 2
+
+    img = Image.new("RGB", (img_w, img_h), (255, 243, 51))   # yellow
+    draw = ImageDraw.Draw(img)
+
+    try:
+        font = ImageFont.truetype(CJK_FONT_PATH, FONT_PX)
+    except Exception:
+        font = ImageFont.load_default()
+
+    for j, line in enumerate(gift_lines):
+        draw.text((PAD, PAD + j * LINE_H_PX), line, font=font, fill=(13, 13, 13))
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def make_warn_image(text: str, page_width_pt: float) -> bytes:
+    """Render a single-line orange warning banner as PNG."""
+    DPI = 150
+    SCALE = DPI / 72
+    FONT_PX = int(7 * SCALE)
+    PAD = int(2 * SCALE)
+    img_w = int(page_width_pt * SCALE)
+    img_h = int(14 * SCALE)
+
+    img = Image.new("RGB", (img_w, img_h), (255, 153, 26))   # orange
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype(CJK_FONT_PATH, FONT_PX)
+    except Exception:
+        font = ImageFont.load_default()
+    draw.text((PAD, PAD), text, font=font, fill=(60, 20, 0))
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 st.set_page_config(page_title="Packing Slip B4 Annotator", layout="centered")
 st.title("📦 Packing Slip B4 Annotator")
@@ -135,9 +217,8 @@ def build_gift_lines(rows):
 
 def stamp_gift_label(fitz_page, pl_page, gift_lines):
     """
-    Draw a yellow-highlighted large text block in the blank space
-    below all existing content on the page.
-    Uses fitz built-in 'china-s' font for full CJK support.
+    Render gift text as a PIL image (yellow background) and insert into the
+    blank area below existing content. PIL + real CJK font = always works.
     """
     words = pl_page.extract_words()
     if words:
@@ -147,43 +228,21 @@ def stamp_gift_label(fitz_page, pl_page, gift_lines):
     else:
         last_bottom = 160
 
-    pw = pl_page.width
-    ph = pl_page.height
+    pw   = pl_page.width
+    ph   = pl_page.height
     footer_y = ph - 35
-
     available = footer_y - last_bottom - 8
     if available < 20:
-        last_bottom = footer_y - len(gift_lines) * 22 - 16
+        last_bottom = footer_y - len(gift_lines) * 20 - 12
 
-    MARGIN = 6
-    stamp_y = last_bottom + 8
-    line_h = min(22, max(14, available / max(len(gift_lines), 1) - 2))
-    font_size = line_h * 0.75
+    MARGIN   = 6
+    stamp_y  = last_bottom + 6
+    LINE_H   = 18                          # pts per line
+    box_h    = len(gift_lines) * LINE_H + 8
 
-    box_h = len(gift_lines) * line_h + 10
-    box_rect = fitz.Rect(MARGIN - 2, stamp_y - 2,
-                         pw - MARGIN + 2, stamp_y + box_h)
-
-    # Yellow highlight background
-    shape = fitz_page.new_shape()
-    shape.draw_rect(box_rect)
-    shape.finish(fill=(1.0, 0.95, 0.2), color=(0.85, 0.7, 0.0), width=1.5)
-    shape.commit()
-
-    # One textbox per line — fitz china-s renders CJK correctly
-    for j, line in enumerate(gift_lines):
-        line_rect = fitz.Rect(
-            MARGIN, stamp_y + j * line_h,
-            pw - MARGIN, stamp_y + (j + 1) * line_h + 2
-        )
-        fitz_page.insert_textbox(
-            line_rect,
-            line,
-            fontsize=font_size,
-            fontname="china-s",       # fitz built-in Simplified Chinese font
-            color=(0.05, 0.05, 0.05),
-            align=0,                  # left-align
-        )
+    png = make_label_image(gift_lines, pw - MARGIN * 2)
+    img_rect = fitz.Rect(MARGIN, stamp_y, pw - MARGIN, stamp_y + box_h)
+    fitz_page.insert_image(img_rect, stream=png)
 
 
 # ── Annotate PDF ────────────────────────────────────────────────────────────
@@ -199,13 +258,8 @@ with st.spinner("正在匹配并标注..."):
             if not order_id or not tracking_last4:
                 continue
 
-            # Match: tracking last 4 first, then confirm with order ID
-            subset = df[df["_track4"] == tracking_last4]
-            if subset.empty:
-                continue
-            matched = subset[subset["_order"] == order_id]
-            if matched.empty:
-                matched = subset  # fallback: tracking only
+            # Match by tracking last-4 (primary key)
+            matched = df[df["_track4"] == tracking_last4]
 
             if matched.empty:
                 continue
@@ -214,6 +268,18 @@ with st.spinner("正在匹配并标注..."):
             fitz_page = doc[page_idx]
             pw = pl_page.width
             ph = pl_page.height
+
+            # ── 0. Check Order ID match; warn if mismatched ──────────────
+            order_ids_in_b4 = set(matched["_order"].tolist())
+            order_id_mismatch = order_id not in order_ids_in_b4
+            if order_id_mismatch:
+                warn_text = (
+                    f"⚠ 请核对! Order ID不一致: PDF={order_id}  "
+                    f"B4表={', '.join(order_ids_in_b4)}"
+                )
+                warn_png  = make_warn_image(warn_text, pw)
+                warn_rect = fitz.Rect(0, 0, pw, 14)
+                fitz_page.insert_image(warn_rect, stream=warn_png)
 
             # ── 1. Highlight rows where Qty != 1 ────────────────────────
             qty_rects = find_qty_highlight_rects(pl_page)
@@ -230,11 +296,11 @@ with st.spinner("正在匹配并标注..."):
             # ── 2. Stamp B4 gift info in blank area (yellow, large) ─────
             gift_lines = build_gift_lines(matched)
             if not gift_lines:
-                preview_entries.append((page_idx, order_id, [], has_qty_warn))
+                preview_entries.append((page_idx, order_id, [], has_qty_warn, order_id_mismatch))
                 continue
 
             stamp_gift_label(fitz_page, pl_page, gift_lines)
-            preview_entries.append((page_idx, order_id, gift_lines, has_qty_warn))
+            preview_entries.append((page_idx, order_id, gift_lines, has_qty_warn, order_id_mismatch))
 
     output = io.BytesIO()
     doc.save(output)
@@ -242,12 +308,12 @@ with st.spinner("正在匹配并标注..."):
     # Render preview images AFTER saving (so annotations are baked in)
     preview_images = []
     doc2 = fitz.open(stream=output.getvalue(), filetype="pdf")
-    for page_idx, order_id, gift_lines, has_qty_warn in preview_entries:
+    for page_idx, order_id, gift_lines, has_qty_warn, order_id_mismatch in preview_entries:
         page = doc2[page_idx]
-        mat = fitz.Matrix(2.5, 2.5)   # 2.5× zoom → ~190 DPI for A5
+        mat = fitz.Matrix(2.5, 2.5)
         pix = page.get_pixmap(matrix=mat, alpha=False)
         img_bytes = pix.tobytes("png")
-        preview_images.append((page_idx + 1, order_id, gift_lines, has_qty_warn, img_bytes))
+        preview_images.append((page_idx + 1, order_id, gift_lines, has_qty_warn, order_id_mismatch, img_bytes))
     doc2.close()
     doc.close()
 
@@ -268,16 +334,19 @@ if preview_images:
     st.markdown("---")
     st.subheader(f"📄 已标注页面预览（共 {len(preview_images)} 页）")
 
-    for page_num, order_id, gift_lines, has_qty_warn, img_bytes in preview_images:
+    for page_num, order_id, gift_lines, has_qty_warn, order_id_mismatch, img_bytes in preview_images:
         tags = []
         if gift_lines:
             tags.append("🎁 赠品已标注")
         if has_qty_warn:
             tags.append("🔴 数量 > 1 警告")
+        if order_id_mismatch:
+            tags.append("⚠️ Order ID 不一致")
         tag_str = "　".join(tags)
 
         with st.expander(f"第 {page_num} 页　Order {order_id}　{tag_str}", expanded=True):
-            # Summary badges
+            if order_id_mismatch:
+                st.error("⚠️ Order ID 与 B4 表不一致，已按 Tracking 尾号匹配，请人工核对！")
             if gift_lines:
                 st.markdown("**赠品：** " + "　·　".join(gift_lines))
             if has_qty_warn:

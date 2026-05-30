@@ -2,3 +2,4 @@ streamlit
 pdfplumber
 pymupdf>=1.23.0
 pandas
+Pillow
