@@ -191,14 +191,15 @@ def stamp_gift_label(fitz_page, pl_page, gift_lines):
     shape.finish(fill=(1.0, 0.95, 0.2), color=(0.85, 0.7, 0.0), width=1.5)
     shape.commit()
 
-    # One line per item — insert_text never clips, works with fontfile
+    # Register the font with this page first, then reference by name
+    fitz_page.insert_font(fontname="cjk", fontfile=CJK_FONT_PATH)
+
     for j, line in enumerate(gift_lines):
         y = stamp_y + j * line_h + line_h * 0.78
         fitz_page.insert_text(
             fitz.Point(MARGIN + 2, y),
             line,
             fontsize=font_size,
-            fontfile=CJK_FONT_PATH,
             fontname="cjk",
             color=(0.05, 0.05, 0.05),
         )
