@@ -4,26 +4,6 @@ import fitz  # PyMuPDF
 import pandas as pd
 import re
 import io
-import os
-import urllib.request
-
-# ── CJK font: use bundled NotoSansCJK if Arial Unicode not present ──────────
-_LOCAL_FONT = "/Library/Fonts/Arial Unicode.ttf"
-_FALLBACK_FONT_URL = (
-    "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/"
-    "NotoSansCJKsc-Regular.otf"
-)
-_FALLBACK_FONT_PATH = "/tmp/NotoSansCJKsc-Regular.otf"
-
-def _get_cjk_font():
-    if os.path.exists(_LOCAL_FONT):
-        return _LOCAL_FONT
-    if not os.path.exists(_FALLBACK_FONT_PATH):
-        with st.spinner("正在下载中文字体（首次运行）..."):
-            urllib.request.urlretrieve(_FALLBACK_FONT_URL, _FALLBACK_FONT_PATH)
-    return _FALLBACK_FONT_PATH
-
-CJK_FONT = _get_cjk_font()
 
 st.set_page_config(page_title="Packing Slip B4 Annotator", layout="centered")
 st.title("📦 Packing Slip B4 Annotator")
@@ -157,11 +137,11 @@ def stamp_gift_label(fitz_page, pl_page, gift_lines):
     """
     Draw a yellow-highlighted large text block in the blank space
     below all existing content on the page.
+    Uses fitz built-in 'china-s' font for full CJK support.
     """
     words = pl_page.extract_words()
     if words:
-        # Find the lowest content on the page (excluding the tiny footer)
-        footer_top = pl_page.height - 35   # "Packing Slip" footer region
+        footer_top = pl_page.height - 35
         content_words = [w for w in words if w["bottom"] < footer_top]
         last_bottom = max((w["bottom"] for w in content_words), default=160)
     else:
@@ -171,19 +151,18 @@ def stamp_gift_label(fitz_page, pl_page, gift_lines):
     ph = pl_page.height
     footer_y = ph - 35
 
-    # Available blank height
     available = footer_y - last_bottom - 8
     if available < 20:
         last_bottom = footer_y - len(gift_lines) * 22 - 16
 
-    stamp_x = 6
+    MARGIN = 6
     stamp_y = last_bottom + 8
     line_h = min(22, max(14, available / max(len(gift_lines), 1) - 2))
-    font_size = line_h * 0.78
+    font_size = line_h * 0.75
 
     box_h = len(gift_lines) * line_h + 10
-    box_rect = fitz.Rect(stamp_x - 2, stamp_y - 2,
-                         pw - stamp_x + 2, stamp_y + box_h)
+    box_rect = fitz.Rect(MARGIN - 2, stamp_y - 2,
+                         pw - MARGIN + 2, stamp_y + box_h)
 
     # Yellow highlight background
     shape = fitz_page.new_shape()
@@ -191,15 +170,19 @@ def stamp_gift_label(fitz_page, pl_page, gift_lines):
     shape.finish(fill=(1.0, 0.95, 0.2), color=(0.85, 0.7, 0.0), width=1.5)
     shape.commit()
 
-    # Large bold text with CJK font
+    # One textbox per line — fitz china-s renders CJK correctly
     for j, line in enumerate(gift_lines):
-        y = stamp_y + j * line_h + line_h * 0.8
-        fitz_page.insert_text(
-            fitz.Point(stamp_x + 2, y),
+        line_rect = fitz.Rect(
+            MARGIN, stamp_y + j * line_h,
+            pw - MARGIN, stamp_y + (j + 1) * line_h + 2
+        )
+        fitz_page.insert_textbox(
+            line_rect,
             line,
             fontsize=font_size,
-            fontfile=CJK_FONT,
-            color=(0.1, 0.1, 0.1),
+            fontname="china-s",       # fitz built-in Simplified Chinese font
+            color=(0.05, 0.05, 0.05),
+            align=0,                  # left-align
         )
 
 
