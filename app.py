@@ -170,14 +170,20 @@ def stamp_gift_label(fitz_page, pl_page, gift_lines):
     shape.finish(fill=(1.0, 0.95, 0.2), color=(0.85, 0.7, 0.0), width=1.5)
     shape.commit()
 
-    # Use PyMuPDF built-in Simplified Chinese font via TextWriter
-    # (avoids any external font encoding issues)
-    font = fitz.Font("china-s")
-    tw = fitz.TextWriter(fitz_page.rect)
+    # One textbox per line — fitz china-s renders CJK correctly
     for j, line in enumerate(gift_lines):
-        y = stamp_y + j * line_h + line_h * 0.78
-        tw.append((MARGIN + 2, y), line, font=font, fontsize=font_size)
-    tw.write_text(fitz_page, color=(0.05, 0.05, 0.05))
+        line_rect = fitz.Rect(
+            MARGIN, stamp_y + j * line_h,
+            pw - MARGIN, stamp_y + (j + 1) * line_h + 2
+        )
+        fitz_page.insert_textbox(
+            line_rect,
+            line,
+            fontsize=font_size,
+            fontname="china-s",       # fitz built-in Simplified Chinese font
+            color=(0.05, 0.05, 0.05),
+            align=0,                  # left-align
+        )
 
 
 # ── Annotate PDF ────────────────────────────────────────────────────────────
@@ -193,18 +199,13 @@ with st.spinner("正在匹配并标注..."):
             if not order_id or not tracking_last4:
                 continue
 
-            # Match: all B4 rows sharing the same tracking last-4.
-            # One tracking = one physical package, so ALL rows for that
-            # tracking belong in that package, even across multiple CSV rows.
-            # Use order_id only to confirm this page has any B4 record at all.
+            # Match: tracking last 4 first, then confirm with order ID
             subset = df[df["_track4"] == tracking_last4]
             if subset.empty:
                 continue
-            # Confirm at least one row matches this page's order_id
-            confirmed = subset[subset["_order"] == order_id]
-            if confirmed.empty:
-                continue          # this page has no B4 entry → skip
-            matched = subset      # but stamp ALL rows for this tracking
+            matched = subset[subset["_order"] == order_id]
+            if matched.empty:
+                matched = subset  # fallback: tracking only
 
             if matched.empty:
                 continue
@@ -282,3 +283,4 @@ if preview_images:
             if has_qty_warn:
                 st.warning("该订单有商品数量 > 1，请注意多放！")
             st.image(img_bytes, use_container_width=True)
+
