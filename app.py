@@ -35,17 +35,17 @@ def get_cjk_font_path() -> str:
 CJK_FONT_PATH = get_cjk_font_path()
 
 
-def make_label_image(gift_lines: list[str], page_width_pt: float) -> bytes:
+def make_label_image(gift_lines: list[str], page_width_pt: float,
+                     line_h_pt: float = 18, font_pt: float = 13) -> bytes:
     """
     Render gift_lines as a yellow PIL image and return PNG bytes.
     Uses a real CJK font → guaranteed correct rendering on all platforms.
     """
     DPI = 150
     SCALE = DPI / 72          # 1 pt → pixels
-    FONT_PT = 13              # label font size in points
-    LINE_H_PX = int(18 * SCALE)
-    FONT_PX   = int(FONT_PT * SCALE)
-    PAD = int(4 * SCALE)
+    LINE_H_PX = max(1, int(line_h_pt * SCALE))
+    FONT_PX   = max(1, int(font_pt * SCALE))
+    PAD = int(3 * SCALE)
 
     img_w = int((page_width_pt - 8) * SCALE)
     img_h = len(gift_lines) * LINE_H_PX + PAD * 2
@@ -232,29 +232,35 @@ def build_gift_lines(rows):
 def stamp_gift_label(fitz_page, pl_page, gift_lines):
     """
     Render gift text as a PIL image (yellow background) and insert into the
-    blank area below existing content. PIL + real CJK font = always works.
+    blank area below existing content. Font size scales to fit available space.
     """
     words = pl_page.extract_words()
+    pw  = pl_page.width
+    ph  = pl_page.height
+
+    # Footer "Packing Slip" sits at the very bottom ~28 pt
+    footer_y = ph - 28
     if words:
-        footer_top = pl_page.height - 35
-        content_words = [w for w in words if w["bottom"] < footer_top]
+        # Bottom of the lowest word above the footer
+        content_words = [w for w in words if w["bottom"] < footer_y - 4]
         last_bottom = max((w["bottom"] for w in content_words), default=160)
     else:
         last_bottom = 160
 
-    pw   = pl_page.width
-    ph   = pl_page.height
-    footer_y = ph - 35
-    available = footer_y - last_bottom - 8
-    if available < 20:
-        last_bottom = footer_y - len(gift_lines) * 20 - 12
+    MARGIN  = 6
+    GAP     = 4                    # gap between content and label
+    stamp_y = last_bottom + GAP
+    available_h = footer_y - stamp_y - 4   # pts of blank space
 
-    MARGIN   = 6
-    stamp_y  = last_bottom + 6
-    LINE_H   = 18                          # pts per line
-    box_h    = len(gift_lines) * LINE_H + 8
+    n = len(gift_lines)
+    # Fit: line_h * n + padding <= available_h
+    # line_h is capped: max 20 pt, min 9 pt
+    line_h = min(20, max(9, (available_h - 6) / n))
+    font_pt = line_h * 0.72        # font size in points
+    box_h   = n * line_h + 6
 
-    png = make_label_image(gift_lines, pw - MARGIN * 2)
+    png = make_label_image(gift_lines, pw - MARGIN * 2,
+                           line_h_pt=line_h, font_pt=font_pt)
     img_rect = fitz.Rect(MARGIN, stamp_y, pw - MARGIN, stamp_y + box_h)
     fitz_page.insert_image(img_rect, stream=png)
 
