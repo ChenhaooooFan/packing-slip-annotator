@@ -283,17 +283,30 @@ with st.spinner("正在匹配并标注..."):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     matched_pages = 0
     highlighted_qty_pages = 0
-    preview_entries = []   # list of (page_num_1based, order_id, gift_lines, has_qty_warn)
+    preview_entries = []
 
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as plumber_pdf:
+
+        # ── Pass 1: Qty != 1 highlight on EVERY page ────────────────────
+        for page_idx, pl_page in enumerate(plumber_pdf.pages):
+            qty_rects = find_qty_highlight_rects(pl_page)
+            if qty_rects:
+                fitz_page = doc[page_idx]
+                for rect in qty_rects:
+                    highlighted_qty_pages += 1
+                    ann = fitz_page.add_rect_annot(rect)
+                    ann.set_colors(stroke=(1, 0.2, 0.2), fill=(1, 0.85, 0.85))
+                    ann.set_border(width=1.5)
+                    ann.set_opacity(0.6)
+                    ann.update()
+
+        # ── Pass 2: B4 gift label + order_id mismatch warn ──────────────
         for page_idx, pl_page in enumerate(plumber_pdf.pages):
             order_id, tracking_last4 = extract_page_meta(pl_page)
             if not order_id or not tracking_last4:
                 continue
 
-            # Match by tracking (primary) or order_id (fallback)
             matched, order_id_mismatch = match_rows(order_id, tracking_last4)
-
             if matched.empty:
                 continue
 
@@ -302,7 +315,10 @@ with st.spinner("正在匹配并标注..."):
             pw = pl_page.width
             ph = pl_page.height
 
-            # ── 0. Warn if tracking matched but order_id doesn't align ───
+            # Check if this page had any Qty warn
+            has_qty_warn = bool(find_qty_highlight_rects(pl_page))
+
+            # ── 0. Warn if order_id doesn't align ───────────────────────
             if order_id_mismatch:
                 all_b4_ids = set()
                 for _, row in matched.iterrows():
@@ -314,18 +330,6 @@ with st.spinner("正在匹配并标注..."):
                 warn_png  = make_warn_image(warn_text, pw)
                 warn_rect = fitz.Rect(0, 0, pw, 14)
                 fitz_page.insert_image(warn_rect, stream=warn_png)
-
-            # ── 1. Highlight rows where Qty != 1 ────────────────────────
-            qty_rects = find_qty_highlight_rects(pl_page)
-            has_qty_warn = False
-            for rect in qty_rects:
-                highlighted_qty_pages += 1
-                has_qty_warn = True
-                ann = fitz_page.add_rect_annot(rect)
-                ann.set_colors(stroke=(1, 0.2, 0.2), fill=(1, 0.85, 0.85))
-                ann.set_border(width=1.5)
-                ann.set_opacity(0.6)
-                ann.update()
 
             # ── 2. Stamp B4 gift info in blank area (yellow, large) ─────
             gift_lines = build_gift_lines(matched)
