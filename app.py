@@ -118,21 +118,34 @@ df["_order_ids"] = df["Order ID"].str.strip().apply(
     lambda x: {oid.strip() for oid in x.split("\n") if oid.strip()}
 )
 
+# Deduplicate: same tracking + same style content = accidental duplicate entry
+df = df.drop_duplicates(
+    subset=["Tracking ID (Last 4 digital)", "Order ID", "款式 + 库位"]
+).reset_index(drop=True)
 
-def match_rows(page_order_id: str, page_track4: str) -> pd.DataFrame:
+
+def match_rows(page_order_id: str, page_track4: str):
     """
-    Return all CSV rows where EITHER:
-      • tracking last-4 matches (if row has tracking), OR
-      • page order_id is in the row's order ID set
-    Each CSV row counts as exactly one gift item — no duplication.
+    Returns (matched_df, order_id_mismatch: bool).
+
+    Logic:
+    1. Match by tracking last-4 (primary, always used when tracking exists in CSV).
+    2. If no tracking match → fallback to order_id match (rows without tracking).
+    After matching by tracking, check whether page's order_id appears in any
+    matched row → if not, flag as mismatch (still annotate, just warn).
     """
-    matched = []
-    for _, row in df.iterrows():
-        track_ok = row["_has_track"] and row["_track4"] == page_track4
-        order_ok = page_order_id in row["_order_ids"]
-        if track_ok or order_ok:
-            matched.append(row)
-    return pd.DataFrame(matched) if matched else pd.DataFrame()
+    # Priority 1: tracking match
+    if page_track4:
+        by_track = df[df["_has_track"] & (df["_track4"] == page_track4)]
+        if not by_track.empty:
+            matched = by_track.reset_index(drop=True)
+            # Secondary check: does this page's order_id appear in matched rows?
+            order_ok = any(page_order_id in row["_order_ids"]
+                           for _, row in matched.iterrows())
+            return matched, not order_ok   # mismatch = True when order not found
+    # Priority 2: order_id fallback (rows that have no tracking)
+    by_order = df[df["_order_ids"].apply(lambda s: page_order_id in s)]
+    return by_order.reset_index(drop=True), False
 
 # ── Parse PDF pages ─────────────────────────────────────────────────────────
 pdf_bytes = pdf_file.read()
@@ -278,8 +291,8 @@ with st.spinner("正在匹配并标注..."):
             if not order_id or not tracking_last4:
                 continue
 
-            # Match: tracking OR order_id (whichever is available)
-            matched = match_rows(order_id, tracking_last4)
+            # Match by tracking (primary) or order_id (fallback)
+            matched, order_id_mismatch = match_rows(order_id, tracking_last4)
 
             if matched.empty:
                 continue
@@ -289,20 +302,14 @@ with st.spinner("正在匹配并标注..."):
             pw = pl_page.width
             ph = pl_page.height
 
-            # ── 0. Check Order ID match; warn if matched only by tracking ──
-            # A row is "order-confirmed" if the page's order_id is in its set
-            order_confirmed = any(
-                order_id in row["_order_ids"]
-                for _, row in matched.iterrows()
-            )
-            order_id_mismatch = not order_confirmed
+            # ── 0. Warn if tracking matched but order_id doesn't align ───
             if order_id_mismatch:
                 all_b4_ids = set()
                 for _, row in matched.iterrows():
                     all_b4_ids |= row["_order_ids"]
                 warn_text = (
-                    f"⚠ 请核对! Order ID不一致: PDF={order_id}  "
-                    f"B4表={', '.join(sorted(all_b4_ids))}"
+                    f"⚠ 请核对! Tracking对上但Order ID不一致: "
+                    f"PDF={order_id}  B4表={', '.join(sorted(all_b4_ids))}"
                 )
                 warn_png  = make_warn_image(warn_text, pw)
                 warn_rect = fitz.Rect(0, 0, pw, 14)
