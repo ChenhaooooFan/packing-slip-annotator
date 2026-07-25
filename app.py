@@ -151,21 +151,34 @@ def match_rows(page_order_id: str, page_track4: str):
 pdf_bytes = pdf_file.read()
 
 def extract_page_meta(page):
-    """Return (order_id, tracking_last4) from a pdfplumber page."""
+    """Return (order_id, tracking_last4) from a pdfplumber page.
+
+    The tracking number on these slips WRAPS onto the following line(s) (often
+    with only the last 1–2 digits on the next line). Taking `lines[i+1]` alone
+    gives the wrong last-4 (e.g. "0008" instead of "7568"). So we join the digits
+    after "Tracking number:" with every following pure-digit continuation line,
+    then take the real last 4 digits of the full concatenated tracking number.
+    """
     text = page.extract_text() or ""
     order_id = None
     tracking_last4 = None
 
     lines = text.split("\n")
     for i, line in enumerate(lines):
-        if "Order ID:" in line:
+        if "Order ID:" in line and order_id is None:   # take first occurrence
             m = re.search(r"Order ID:\s*(\d+)", line)
-            if m and order_id is None:          # take first occurrence
+            if m:
                 order_id = m.group(1).strip()
         if "Tracking number:" in line:
-            # The last 4 digits are on the NEXT line
-            if i + 1 < len(lines):
-                tracking_last4 = lines[i + 1].strip().zfill(4)
+            # digits on the label line itself
+            digits = re.sub(r"\D", "", line.split("Tracking number:", 1)[1])
+            # append any following pure-digit lines (wrapped continuation)
+            j = i + 1
+            while j < len(lines) and re.fullmatch(r"\d+", lines[j].strip()):
+                digits += lines[j].strip()
+                j += 1
+            if len(digits) >= 4:
+                tracking_last4 = digits[-4:]
 
     return order_id, tracking_last4
 
@@ -390,4 +403,3 @@ if preview_images:
             if has_qty_warn:
                 st.warning("该订单有商品数量 > 1，请注意多放！")
             st.image(img_bytes, use_container_width=True)
-
