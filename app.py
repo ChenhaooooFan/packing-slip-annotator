@@ -12,19 +12,25 @@ from PIL import Image, ImageDraw, ImageFont
 # ── Locate a CJK-capable TTF/TTC font ───────────────────────────────────────
 @st.cache_resource(show_spinner="加载字体中…")
 def get_cjk_font_path() -> str:
-    # macOS
+    # 0) Font bundled in the repo next to this file — most reliable on
+    #    Streamlit Cloud (no apt / packages.txt, no network download needed).
+    here = os.path.dirname(os.path.abspath(__file__))
+    bundled = os.path.join(here, "NotoSansSC-Regular.otf")
+    if os.path.exists(bundled):
+        return bundled
+    # 1) macOS local dev
     for p in ["/Library/Fonts/Arial Unicode.ttf",
                "/System/Library/Fonts/STHeiti Medium.ttc"]:
         if os.path.exists(p):
             return p
-    # Streamlit Cloud / Ubuntu  (packages.txt installs fonts-noto-cjk)
+    # 2) Linux system font (only if fonts-noto-cjk happens to be installed)
     hits = glob.glob("/usr/share/fonts/**/Noto*CJK*.ttc", recursive=True)
     if hits:
         return hits[0]
     hits = glob.glob("/usr/share/fonts/**/Noto*CJK*.otf", recursive=True)
     if hits:
         return hits[0]
-    # Last resort: download a small subset
+    # 3) Last resort: download a subset (GitHub redirects to notofonts org)
     dest = "/tmp/NotoSansSC.otf"
     if not os.path.exists(dest):
         urllib.request.urlretrieve(
